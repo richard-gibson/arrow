@@ -1,62 +1,123 @@
 package arrow.data
 
-import arrow.core.identity
+import arrow.core.Option
+import arrow.core.Tuple2
 import arrow.typeclasses.Monoid
-import arrow.typeclasses.Reducer
-import arrow.typeclasses.UnitReducer
 import arrow.typeclasses.Semigroup
+import java.lang.UnsupportedOperationException
 
+sealed abstract class FingerTree<out A> {
 
-sealed abstract class FingerTree<V, A>(val measurer: Reducer<A, V>, val M: Monoid<V>) {
+  abstract fun unconsL(): Option<Tuple2<A, FingerTree<A>>>
+  abstract fun unconsR(): Option<Tuple2<A, FingerTree<A>>>
 
-  fun measure(): V = fingerTreeMeasure<A, V>(M).unit(this)
+}
 
+sealed abstract class Finger<out A> {
+  abstract fun <B> foldMap(SG: Semigroup<B>, f: (A) -> B): B
 
-  fun <B> foldMap(MB: Monoid<B>, f: (A) -> B): B {
-    return fold({ MB.empty() }, { _, x -> f(x) },
-      { v: V, pr: Finger<V, A>, m: FingerTree<V, Node<V, A>>, sf: Finger<V, A> ->
-      with(MB) {
-        pr.foldMap(this, f) + (m.foldMap(MB){x -> x.foldMap(MB){sf.foldMap(MB, f)}})
-      }
-    })
+  abstract fun lhead(): A
+  abstract fun ltail(): Finger<A>
+  abstract fun rhead(): A
+  abstract fun rtail(): Finger<A>
+
+  abstract fun <B> map(f: (A) -> B): Finger<B>
+//  def toTree[V](implicit m: Measured[V, A]): FingerTree[V, A]
+//  def measure[V](implicit m: Measured[V, A]) = FingerMeasured(m)(this)
+}
+
+fun <A> Finger<A>.append(a: A): Finger<A> =
+  when (this) {
+    is Empty -> One(a)
+    is One -> Two(a, a1)
+    is Two -> Three(a, a1, a2)
+    is Three -> Four(a, a1, a2, a3)
+    is Four -> throw UnsupportedOperationException("")
+  }
+
+fun <A> Finger<A>.prepend(a: A): Finger<A> =
+  when (this) {
+    is Empty -> One(a)
+    is One -> Two(a1, a)
+    is Two -> Three(a1, a2, a)
+    is Three -> Four(a1, a2, a3, a)
+    is Four -> throw UnsupportedOperationException("")
   }
 
 
-  fun <B> foldRight(z: () -> B, f: (A, B) -> B): B =
-    foldMap(M)
-      /**
-       * Fold over the structure of the tree. The given functions correspond to the three possible variations of the finger tree.
-       *
-       * @param empty if the tree is empty, convert the measure to a `B`
-       * @param single if the tree contains a single element, convert the measure and this element to a `B`
-       * @param deep otherwise, convert the measure, the two fingers, and the sub tree to a `B`.
-       */
-      abstract fun <B> fold(empty: (V) -> B, single: (V, A) -> B,
-                            deep: (V, Finger<V, A>, FingerTree<V, Node<V, A>>, Finger<V, A>) -> B): B
+object Empty : Finger<Nothing>() {
+  override fun <B> foldMap(SG: Semigroup<B>, f: (Nothing) -> B): B = throw UnsupportedOperationException("")
 
+  override fun lhead(): Nothing = throw UnsupportedOperationException("")
+  override fun ltail(): Finger<Nothing> = throw UnsupportedOperationException("")
+
+  override fun rhead(): Nothing = throw UnsupportedOperationException("")
+  override fun rtail(): Finger<Nothing> = throw UnsupportedOperationException("")
+
+  override fun <B> map(f: (Nothing) -> B): Finger<B> = throw UnsupportedOperationException("")
 
 }
 
-sealed abstract class Finger<V, A> {
-  abstract fun measure(): V
-  abstract fun <B> foldMap(SG: Semigroup<B>, f: (A) -> B): B
+data class One<out A>(val a1: A) : Finger<A>() {
+  override fun <B> foldMap(SG: Semigroup<B>, f: (A) -> B): B = f(a1)
+
+  override fun lhead(): A = a1
+
+  override fun ltail(): Finger<A> = Empty
+
+  override fun rhead(): A = a1
+
+  override fun rtail(): Finger<A> = Empty
+
+  override fun <B> map(f: (A) -> B): Finger<B> = One(f(a1))
+
+}
+
+data class Two<out A>(val a1: A, val a2: A) : Finger<A>() {
+  override fun <B> foldMap(SG: Semigroup<B>, f: (A) -> B): B =
+    with(SG) { f(a1).combine(f(a2)) }
+
+  override fun lhead(): A = a1
+
+  override fun ltail(): Finger<A> = One(a2)
+
+  override fun rhead(): A = a2
+
+  override fun rtail(): Finger<A> = One(a1)
+
+  override fun <B> map(f: (A) -> B): Finger<B> = Two(f(a1), f(a2))
 
 }
 
 
-sealed abstract class Node<V, A>(R: Reducer<A, V>, M: Monoid<V>) {
+data class Three<out A>(val a1: A, val a2: A, val a3: A) : Finger<A>() {
+  override fun <B> foldMap(SG: Semigroup<B>, f: (A) -> B): B =
+    with(SG) { f(a1) + f(a2) + f(a3) }
 
-  abstract fun <B> fold(two: (V, A, A) -> B, three: (V, A, A, A) -> B): B
-  fun <B> foldMap(SG: Semigroup<B>, f: (A) -> B): B =
-    fold({ _, a1, a2 -> with(SG) { f(a1) + f(a2) } },
-      {_,  a1, a2, a3 -> with(SG){f(a1) + f(a2) + f(a3)}})
+  override fun lhead(): A = a1
 
+  override fun ltail(): Finger<A> = Two(a2, a3)
 
+  override fun rhead(): A = a3
+
+  override fun rtail(): Finger<A> = Two(a1, a2)
+
+  override fun <B> map(f: (A) -> B): Finger<B> = Three(f(a1), f(a2), f(a3))
 
 }
 
-fun <A, V> fingerMeasure(SG: Semigroup<V>): Reducer<Finger<V, A>, V> =
-  UnitReducer(SG){ a -> a.measure()}
+data class Four<out A>(val a1: A, val a2: A, val a3: A, val a4: A) : Finger<A>() {
+  override fun <B> foldMap(SG: Semigroup<B>, f: (A) -> B): B =
+    with(SG) { f(a1) + f(a2) + f(a3) + f(a4)}
 
-fun <A, V> fingerTreeMeasure(SG: Semigroup<V>): Reducer<FingerTree<V, A>, V> =
-  UnitReducer(SG){ a -> a.fold(::identity, {v, _ -> v}, {v, _, _, _ -> v})}
+  override fun lhead(): A = a1
+
+  override fun ltail(): Finger<A> = Three(a2, a3, a4)
+
+  override fun rhead(): A = a4
+
+  override fun rtail(): Finger<A> = Three(a1, a2, a3)
+
+  override fun <B> map(f: (A) -> B): Finger<B> = Four(f(a1), f(a2), f(a3), f(a4))
+
+}
